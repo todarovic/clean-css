@@ -1,5 +1,6 @@
 var fs = require('fs');
 var path = require('path');
+var url = require('url');
 
 var applySourceMaps = require('./apply-source-maps');
 var extractImportUrlAndMedia = require('./extract-import-url-and-media');
@@ -17,9 +18,26 @@ var Marker = require('../tokenizer/marker');
 var hasProtocol = require('../utils/has-protocol');
 var isImport = require('../utils/is-import');
 var isRemoteResource = require('../utils/is-remote-resource');
+var isHttpResource = require('../utils/is-http-resource');
+var isHttpsResource = require('../utils/is-https-resource');
 
 var UNKNOWN_URI = 'uri:unknown';
 var FILE_RESOURCE_PROTOCOL = 'file://';
+var UNSAFE_HOSTNAME_PATTERN = /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1$|f[cd][0-9a-f]{2}:|fe80:)/i;
+
+// Blocks SSRF via dangerous protocols (e.g. file://, gopher://) and requests
+// aimed at loopback/private/link-local addresses (including the common
+// 169.254.169.254 cloud metadata endpoint).
+function isSafeRemoteUri(uri) {
+  var hostname;
+
+  if (!isHttpResource(uri) && !isHttpsResource(uri)) {
+    return false;
+  }
+
+  hostname = url.parse(uri).hostname || '';
+  return hostname != 'localhost' && !UNSAFE_HOSTNAME_PATTERN.test(hostname);
+}
 
 function readSources(input, context, callback) {
   return doReadSources(input, context, function(tokens) {
@@ -211,7 +229,7 @@ function inlineStylesheet(token, inlinerContext) {
 }
 
 function inlineRemoteStylesheet(uri, mediaQuery, metadata, inlinerContext) {
-  var isAllowed = isAllowedResource(uri, true, inlinerContext.inline);
+  var isAllowed = isAllowedResource(uri, true, inlinerContext.inline) && isSafeRemoteUri(uri);
   var originalUri = uri;
   var isLoaded = uri in inlinerContext.externalContext.sourcesContent;
   var isRuntimeResource = !hasProtocol(uri);
